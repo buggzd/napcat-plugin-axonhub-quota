@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AxonHub 额度设置</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 24px; background: light-dark(#f4f6f8, #16191e); color: light-dark(#17202c, #e5e9f0); }
+    main { max-width: 680px; margin: auto; }
+    h1 { font-size: 24px; margin-bottom: 8px; } p { line-height: 1.6; }
+    form, section { padding: 24px; border: 1px solid #8884; border-radius: 16px; margin: 20px 0; background: light-dark(#fff, #20252d); }
+    label { display: block; margin: 16px 0 6px; } input:not([type=checkbox]), textarea { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #8887; border-radius: 7px; font: inherit; }
+    input[type=checkbox] { margin-right: 8px; } small { display: block; opacity: .72; line-height: 1.6; margin-top: 5px; }
+    button { background: #2868df; color: white; border: 0; border-radius: 8px; padding: 11px 18px; font: inherit; cursor: pointer; margin: 16px 8px 0 0; }
+    button:disabled { opacity: .5; cursor: wait; } pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; }
+    #status { min-height: 24px; } .error { color: light-dark(#bc2434, #ff9a9a); }
+    #images img { display: block; width: 400px; max-width: 100%; height: auto; margin-top: 18px; border-radius: 13px; }
+  </style>
+</head>
+<body><main>
+  <h1>AxonHub 订阅额度</h1>
+  <p>查询已启用 Codex 渠道的订阅窗口。群内发送 <b>@机器人 /额度</b>，私聊发送 <b>/额度</b>。</p>
+  <p id="status" role="status" aria-live="polite">正在读取配置…</p>
+  <form id="settings">
+    <fieldset id="fields" disabled style="border:0;padding:0;margin:0">
+      <label><input type="checkbox" id="enabled">启用 QQ 查询</label>
+      <label for="baseUrl">AxonHub 地址</label><input id="baseUrl" type="url" required maxlength="2048" autocomplete="url">
+      <label for="email">管理员邮箱</label><input id="email" type="email" maxlength="2048" autocomplete="username">
+      <label for="password">管理员密码</label><input id="password" type="password" maxlength="2048" autocomplete="new-password" placeholder="留空保留已保存密码">
+      <small id="passwordState"></small><label><input type="checkbox" id="clearPassword">清除已保存密码</label>
+      <label for="allowedGroups">允许查询的群号</label><textarea id="allowedGroups" rows="2" maxlength="16000" placeholder="逗号或空格分隔"></textarea>
+      <small>允许这些群中的所有成员查询，必须 @机器人。留空关闭群查询。</small>
+      <label for="allowedUsers">允许私聊的 QQ 号</label><textarea id="allowedUsers" rows="2" maxlength="16000" placeholder="逗号或空格分隔"></textarea>
+      <small>私聊单独检查此名单。留空关闭私聊查询。</small>
+      <label><input type="checkbox" id="privateBinding">允许私聊绑定及查询个人用量</label>
+      <small>无需加入私聊白名单即可绑定、解绑和查询自己的用量；私聊 /额度 仍受白名单限制。API Key 自动验证，账户名需要在下方确认。</small>
+      <label>额度图片显示渠道</label><select id="channelMode"><option value="all">全部已启用 Codex 渠道</option><option value="selected">只显示勾选渠道</option></select>
+      <div id="channels">点击下方“刷新渠道与绑定”加载列表。</div><small>选择“只显示勾选渠道”但未勾选时，不显示任何渠道。此处不影响个人用量统计。</small>
+      <button type="submit">保存配置</button>
+    </fieldset>
+  </form>
+  <section><b>用户绑定与申请</b><p>用户私聊发送 /绑定APIKEY 你的Key 自动验证，或 /绑定账号 账户名 提交申请。确认申请前请核对 QQ 与账号的归属。</p>
+    <button id="catalog" disabled>刷新渠道与绑定</button><div id="bindings"></div><div id="requests"></div>
+    <label for="bindQQ">QQ 号</label><input id="bindQQ" inputmode="numeric" placeholder="申请人的 QQ 号">
+    <label for="bindUser">AxonHub 账号</label><select id="bindUser"></select><br><button id="approve" disabled>确认绑定</button>
+  </section>
+  <section><b>额度预览</b><p>使用已保存配置查询，不发送 QQ 消息。结果缓存 60 秒，读取 AxonHub 已采集数据。</p>
+    <button id="preview" disabled>查询额度</button><div id="images"></div><pre id="result">尚未查询</pre>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const api = '/api/Plugin/ext/napcat-plugin-axonhub-quota';
+function status(text, error = false) { $('status').textContent = text; $('status').className = error ? 'error' : ''; }
+async function request(path, body) {
+  const token = localStorage.getItem('token');
+  if (!token) throw new Error('请先登录 NapCat WebUI，再从插件扩展页打开本页面。');
+  const response = await fetch(api + path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.code !== 0) throw new Error(payload.message || '请求失败，请检查 NapCat 登录状态。');
+  return payload.data;
+}
+let selectedChannels = new Set();
+function show(config) {
+  selectedChannels = new Set(config.channelIds || []);
+  $('privateBinding').checked = config.privateBinding; $('channelMode').value = config.channelMode || 'all';
+  for (const checkbox of $('channels').querySelectorAll('input')) checkbox.checked = selectedChannels.has(checkbox.value);
+  $('enabled').checked = config.enabled;
+  for (const key of ['baseUrl', 'email', 'allowedGroups', 'allowedUsers']) $(key).value = config[key];
+  $('password').value = ''; $('clearPassword').checked = false;
+  $('passwordState').textContent = config.hasPassword ? '密码已保存；留空不修改。' : '尚未配置密码。';
+}
+$('settings').addEventListener('submit', async event => {
+  event.preventDefault(); $('fields').disabled = true;
+  const input = { enabled: $('enabled').checked, clearPassword: $('clearPassword').checked, privateBinding: $('privateBinding').checked, channelMode: $('channelMode').value, channelIds: [...selectedChannels] };
+  for (const key of ['baseUrl', 'email', 'password', 'allowedGroups', 'allowedUsers']) input[key] = $(key).value;
+  try { show(await request('/config', input)); $('images').replaceChildren(); $('result').textContent = '配置已更新，请重新查询。'; status('配置已保存。'); }
+  catch (error) { status(error.message, true); }
+  finally { input.password = ''; $('password').value = ''; $('fields').disabled = false; }
+});
+$('preview').addEventListener('click', async () => {
+  $('preview').disabled = true; $('images').replaceChildren(); $('result').textContent = '查询中…';
+  try {
+    const data = await request('/preview');
+    for (const png of data.images || []) {
+      const image = document.createElement('img'); image.src = 'data:image/png;base64,' + png;
+      image.alt = 'Codex 渠道额度卡片，百分比为已用量'; $('images').append(image);
+    }
+    $('result').textContent = data.images?.length ? '' : '图片暂不可用，显示文字：\n\n' + data.messages.join('\n\n────────\n\n');
+  }
+  catch (error) { $('result').textContent = error.message; }
+  finally { $('preview').disabled = false; }
+});
+function showBindings(data) {
+  $('bindings').replaceChildren(); $('requests').replaceChildren();
+  for (const binding of data.bindings || []) {
+    const row = document.createElement('p'); row.textContent = binding.qq + ' → ' + binding.name;
+    const remove = document.createElement('button'); remove.textContent = '解除';
+    remove.onclick = async () => { remove.disabled = true; try { showBindings(await request('/binding', { action: 'remove', qq: binding.qq })); } catch (error) { status(error.message, true); remove.disabled = false; } };
+    row.append(remove); $('bindings').append(row);
+  }
+  for (const pending of data.requests || []) {
+    const row = document.createElement('p'); row.textContent = '待确认：' + pending.qq + ' · ' + pending.account;
+    const choose = document.createElement('button'); choose.textContent = '选择申请'; choose.onclick = () => { $('bindQQ').value = pending.qq; $('bindUser').value = ''; };
+    const reject = document.createElement('button'); reject.textContent = '取消申请/解除绑定'; reject.onclick = async () => { try { showBindings(await request('/binding', {action:'remove',qq:pending.qq})); } catch(error) {status(error.message,true);} };
+    row.append(choose,reject); $('requests').append(row);
+  }
+}
+$('catalog').onclick = async () => {
+  $('catalog').disabled = true;
+  try {
+    const data = await request('/catalog'); $('channels').replaceChildren(); $('bindUser').replaceChildren();
+    const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = '请选择对应账号'; $('bindUser').append(placeholder);
+    for (const channel of data.channels) {
+      const label = document.createElement('label'), checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.value = channel.id; checkbox.checked = selectedChannels.has(channel.id);
+      checkbox.onchange = () => { if (checkbox.checked) selectedChannels.add(channel.id); else selectedChannels.delete(channel.id); };
+      label.append(checkbox, document.createTextNode(channel.name)); $('channels').append(label);
+    }
+    const missing = [...selectedChannels].filter(id => !data.channels.some(c => c.id === id));
+    if (missing.length) { const note = document.createElement('p'); note.textContent = missing.length + ' 个已选渠道已停用或删除，不会显示。'; $('channels').append(note); }
+    for (const user of data.users) { const option = document.createElement('option'); option.value = user.userId; option.textContent = user.name + ' (' + user.userId.split('/').pop() + ')'; $('bindUser').append(option); }
+    showBindings(data); $('approve').disabled = false; status('渠道与绑定已更新；渠道勾选后请保存配置。');
+  } catch (error) { status(error.message, true); } finally { $('catalog').disabled = false; }
+};
+$('approve').onclick = async () => {
+  $('approve').disabled = true;
+  try { showBindings(await request('/binding', { action: 'approve', qq: $('bindQQ').value.trim(), userId: $('bindUser').value })); status('绑定已确认，用户可发送 /用量。'); }
+  catch (error) { status(error.message, true); } finally { $('approve').disabled = false; }
+};
+request('/config').then(config => { show(config); $('fields').disabled = false; $('preview').disabled = false; $('catalog').disabled = false; status('配置仅限已登录的 NapCat 管理员访问。'); }).catch(error => status(error.message, true));
+</script></body></html>

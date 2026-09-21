@@ -1,0 +1,17 @@
+node_modules/
+dist/
+artifacts/
+coverage/
+*.zip
+.DS_Store
+.env
+.env.*
+*.pem
+*.key
+settings.json
+bindings.json
+webui.json
+data/
+backup/
+backups/
+*.log
