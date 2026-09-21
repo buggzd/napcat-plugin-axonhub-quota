@@ -1,5 +1,9 @@
 # AxonHub 订阅额度 · NapCat 插件
 
+作者：[buggzd](https://github.com/buggzd)
+
+> **安装前请注意：已确认 NapCat v4.18.28 限制非官方插件加载，并移除了 ZIP 导入接口。** 插件目录还在却不显示、日志出现 `not in official plugin whitelist` 时，请先阅读下方[新版 NapCat 安装限制与处理方法](#新版-napcat-安装限制与处理方法)。
+
 在 QQ 中查询 AxonHub 已启用 Codex 渠道的上游订阅窗口，返回接近 AxonHub 深色面板的 PNG 卡片。直接读取 AxonHub 网页接口，运行在现有 NapCat 进程内；无浏览器、无数据库、无额外常驻服务。图片使用随包附带的 resvg WASM 渲染器，不需要运行时安装 npm 包。
 
 ## 使用
@@ -27,6 +31,7 @@ npm ci
 npm run typecheck
 npm test
 npm run build
+# 仅适用于仍提供 ZIP 导入接口的 NapCat 版本
 npm run deploy
 ```
 
@@ -35,6 +40,71 @@ npm run deploy
 图片渲染使用容器已有的文泉驿正黑或 Noto CJK 字体；当前 NapCat 镜像已包含文泉驿。也可以通过 `AXONHUB_QUOTA_FONT` 指定本地中文字体文件。字体不可用时回退文字，不下载远程字体。
 
 默认容器 `napcat`、WebUI `http://127.0.0.1:6099`；可通过 `NAPCAT_CONTAINER`、`NAPCAT_WEBUI_URL` 覆盖。也可以在 NapCat 插件管理中手动导入 ZIP 后启用。
+
+## 新版 NapCat 安装限制与处理方法
+
+已确认 **v4.18.28** 存在以下限制；其他版本请检查实际源码和接口，不要只根据版本号推断兼容性：
+
+- 插件加载器的 `OFFICIAL_PLUGIN_IDS` 写死了四个官方 ID，未在名单中的插件不会出现在管理列表。
+- ZIP 导入接口 `/api/Plugin/Import` 已移除。因此，`npm run deploy` 或旧教程的导入方式可能收到 HTML 页面并报 JSON 解析错误；单纯重装插件不能解决白名单限制。
+- 没有发现该版本提供自定义插件开关或开发者模式。官方代码见 [loader.ts](https://github.com/NapNeko/NapCatQQ/blob/v4.18.28/packages/napcat-onebot/network/plugin/loader.ts)，维护者说明见 [Issue #1897](https://github.com/NapNeko/NapCatQQ/issues/1897#issuecomment-4677893835)。
+
+### 保留新版：本机添加插件白名单
+
+这是对自己部署的 NapCat 的**非官方本地修改**。只添加你信任的插件 ID，不需要关闭整个加载检查，也不要将插件冒名改为官方插件。
+
+以下以 Docker 容器名 `napcat`、程序目录 `/app/napcat` 为例；其他安装方式替换为实际路径。操作前先构建本插件：`npm ci && npm run build`。
+
+1. 备份 NapCat 程序、配置和插件。配置备份包含凭据，请保存到仓库之外的私有目录：
+
+   ```sh
+   umask 077
+   recovery_dir="$(mktemp -d "${TMPDIR:-/tmp}/napcat-recovery.XXXXXX")"
+   docker cp napcat:/app/napcat/napcat.mjs "$recovery_dir/napcat.mjs.original"
+   docker cp napcat:/app/napcat/config "$recovery_dir/config"
+   docker cp napcat:/app/napcat/plugins "$recovery_dir/plugins"
+   cp "$recovery_dir/napcat.mjs.original" "$recovery_dir/napcat.mjs"
+   ```
+
+   记住该目录位置，并将需要长期保留的备份移至私有持久目录；临时目录可能被系统清理。
+
+2. 在编辑器中打开 `$recovery_dir/napcat.mjs`，搜索 `napcat-plugin-qce`，定位同时包含以下四个 ID 的 `new Set([...])`：
+
+   ```js
+   new Set([
+     "napcat-plugin-builtin",
+     "napcat-plugin-cleaner",
+     "napcat-plugin-ssqq",
+     "napcat-plugin-qce",
+     "napcat-plugin-axonhub-quota"
+   ])
+   ```
+
+   **只在这个集合末尾添加 `napcat-plugin-axonhub-quota`**，保留原变量名和其余代码。若结构不同或找到多个位置，先检查版本源码，不要全文替换检查逻辑。其他自有插件可按各自 `package.json` 的 `name` 添加；例如 TheWatcher 的 ID 为 `napcat-plugin-lol-watcher`。
+
+3. 将修改后的程序及本插件构建产物写回。只复制 `dist`，不要把自己的配置或整个开发目录覆盖进去：
+
+   ```sh
+   docker cp "$recovery_dir/napcat.mjs" napcat:/app/napcat/napcat.mjs
+   docker exec napcat mkdir -p /app/napcat/plugins/napcat-plugin-axonhub-quota
+   docker cp dist/. napcat:/app/napcat/plugins/napcat-plugin-axonhub-quota/
+   docker restart napcat
+   ```
+
+4. 等机器人重新登录后，打开 WebUI 插件管理，启用 **AxonHub 订阅额度**，再到插件扩展页保存管理员配置和白名单。已有配置与绑定不会因复制插件文件而删除。先在扩展页预览，再测试 `/help` 和 `/额度`。原本停用的其他插件不会因为加入白名单就自动启用。
+
+5. 如果修改后无法启动，使用备份恢复程序并再次重启：
+
+   ```sh
+   docker cp "$recovery_dir/napcat.mjs.original" napcat:/app/napcat/napcat.mjs
+   docker restart napcat
+   ```
+
+**更新 NapCat 可能覆盖这项修改。** 更新后先检查白名单结构，再重新添加 ID。程序补丁与插件目录持久化是两件事：Docker 重建要保留 `/app/napcat/config` 和 `/app/napcat/plugins` 的挂载，同时保留 QQ 登录数据。为已有容器增加挂载前须迁移原数据，避免用空目录遮住现有配置。
+
+### 不修改新版程序
+
+也可以使用已验证支持自定义插件的旧版本（本插件曾在 v4.16.0 正常运行），但应自行评估旧版兼容性与维护成本。通过 OneBot 运行独立服务是另一种架构；**本仓库目前只提供原生插件，尚未实现独立 OneBot 服务模式**。
 
 ## 配置
 
