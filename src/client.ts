@@ -18,7 +18,7 @@ export const QUOTA_QUERY = `query NapCatCodexQuotas($input: QueryChannelInput!) 
   }
 }`;
 
-type Options = { fetch?: typeof fetch; now?: () => number; timeoutMs?: number; ttlMs?: number };
+type Options = { fetch?: typeof fetch; now?: () => number; timeoutMs?: number; ttlMs?: number; onRequestFailure?: (path: 'signin' | 'graphql', code: string, elapsedMs: number) => void };
 export class AxonHubClient {
     private config: Pick<Config, 'baseUrl' | 'email' | 'password'>;
     private fetcher: typeof fetch;
@@ -32,11 +32,12 @@ export class AxonHubClient {
     private loginBlockedUntil = 0;
     private closed = false;
     private controllers = new Set<AbortController>();
+    private onRequestFailure?: Options['onRequestFailure'];
 
     constructor(config: Pick<Config, 'baseUrl' | 'email' | 'password'>, options: Options = {}) {
         this.config = { ...config }; this.fetcher = options.fetch ?? fetch;
         this.now = options.now ?? Date.now; this.timeoutMs = options.timeoutMs ?? 10000;
-        this.ttlMs = options.ttlMs ?? 60000;
+        this.ttlMs = options.ttlMs ?? 60000; this.onRequestFailure = options.onRequestFailure;
     }
 
     dispose(): void {
@@ -51,6 +52,7 @@ export class AxonHubClient {
 
     private async request(path: string, body: unknown, token = ''): Promise<Record<string, unknown>> {
         this.assertOpen();
+        const started = this.now();
         const controller = new AbortController(); this.controllers.add(controller);
         const timer = setTimeout(() => controller.abort(), this.timeoutMs); timer.unref?.();
         try {
@@ -81,11 +83,16 @@ export class AxonHubClient {
             this.assertOpen();
             return record(JSON.parse(Buffer.concat(chunks).toString('utf8')));
         } catch (error) {
-            if (this.closed) throw new QuotaError('cancelled', '查询已取消。');
-            if (controller.signal.aborted) throw new QuotaError('timeout', 'AxonHub 请求超时，请稍后重试。');
-            if (error instanceof QuotaError) throw error;
-            if (error instanceof SyntaxError) throw new QuotaError('shape', 'AxonHub 返回的数据格式不兼容。');
-            throw new QuotaError('network', '无法连接 AxonHub，请检查地址和网络。');
+            const failure = this.closed ? new QuotaError('cancelled', '查询已取消。')
+                : controller.signal.aborted ? new QuotaError('timeout', 'AxonHub 请求超时，请稍后重试。')
+                : error instanceof QuotaError ? error
+                : error instanceof SyntaxError ? new QuotaError('shape', 'AxonHub 返回的数据格式不兼容。')
+                : new QuotaError('network', '无法连接 AxonHub，请检查地址和网络。');
+            if (!this.closed) {
+                // Only stage, reason and duration; never log token, URL, body or upstream response.
+                try { this.onRequestFailure?.(path.endsWith('/signin') ? 'signin' : 'graphql', failure.code, this.now() - started); } catch { /* Diagnostics cannot break requests. */ }
+            }
+            throw failure;
         } finally { clearTimeout(timer); this.controllers.delete(controller); }
     }
 
@@ -101,8 +108,9 @@ export class AxonHubClient {
                 if (typeof response.token !== 'string' || !response.token) throw new QuotaError('login', 'AxonHub 登录失败，请检查管理员账号。');
                 this.assertOpen(); this.token = response.token; return this.token;
             } catch (error) {
-                this.loginBlockedUntil = this.now() + 30000;
-                if (error instanceof QuotaError && ['unauthenticated', 'login'].includes(error.code)) throw new QuotaError('login', 'AxonHub 登录失败，请检查管理员邮箱和密码（30 秒后可重试）。');
+                if (error instanceof QuotaError && ['unauthenticated', 'login'].includes(error.code)) {
+                    this.loginBlockedUntil = this.now() + 30000; throw new QuotaError('login', 'AxonHub 登录失败，请检查管理员邮箱和密码（30 秒后可重试）。');
+                }
                 throw error;
             }
         })();
@@ -112,7 +120,10 @@ export class AxonHubClient {
     }
 
     async graphql(query: string, variables: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-        for (let attempt = 0; attempt < 2; attempt++) {
+        let authRetries = 0, transientRetries = 0;
+        // All callers use read-only GraphQL queries. Retry a failed transport once only
+        // while processing that command; never poll or refresh in the background.
+        for (let attempt = 0; attempt < 3; attempt++) {
             const token = await this.login();
             try {
                 const response = await this.request('/admin/graphql', { query, variables }, token);
@@ -124,9 +135,15 @@ export class AxonHubClient {
                 }
                 return record(response.data);
             } catch (error) {
-                if (!(error instanceof QuotaError) || error.code !== 'unauthenticated') throw error;
-                if (this.token === token) this.token = '';
-                if (attempt === 1) { this.loginBlockedUntil = this.now() + 30000; throw new QuotaError('login', 'AxonHub 登录状态异常，请检查账号配置后重试。'); }
+                if (!(error instanceof QuotaError)) throw error;
+                if (error.code === 'unauthenticated') {
+                    if (this.token === token) this.token = '';
+                    if (authRetries++ < 1 && attempt < 2) continue;
+                    this.loginBlockedUntil = this.now() + 30000;
+                    throw new QuotaError('login', 'AxonHub 登录状态异常，请检查账号配置后重试。');
+                }
+                if (['timeout', 'network'].includes(error.code) && transientRetries++ < 1 && attempt < 2) continue;
+                throw error;
             }
         }
         throw new QuotaError('login', 'AxonHub 登录失败。');

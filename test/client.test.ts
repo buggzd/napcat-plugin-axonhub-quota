@@ -149,3 +149,55 @@ test('oversized, malformed, partial-error and network responses are safe', async
         client.dispose();
     }
 });
+
+test('one explicit query retries a transient timeout once, sharing the result with concurrent callers', async () => {
+    let logins = 0, queries = 0;
+    const failures: Array<{ path: string; code: string; elapsed: number }> = [];
+    const client = new AxonHubClient(credentials, {
+        timeoutMs: 10,
+        onRequestFailure: (path, code, elapsed) => failures.push({ path, code, elapsed }),
+        fetch: mock(call => {
+            if (call.path.endsWith('/signin')) { logins++; return json({ token: 'secret-token' }); }
+            queries++;
+            if (queries === 1) return new Promise((_resolve, reject) => {
+                // Model a hung upstream request; the request's AbortSignal is checked by fetch itself.
+                setTimeout(() => reject(new DOMException('aborted with secret', 'AbortError')), 15);
+            });
+            return json(page([channel()]));
+        }),
+    });
+    const [first, second] = await Promise.all([client.getQuota(), client.getQuota()]);
+    assert.equal(first, second); assert.equal(first.channels.length, 1);
+    assert.equal(logins, 1); assert.equal(queries, 2);
+    assert.deepEqual(failures.map(f => [f.path, f.code]), [['graphql', 'timeout']]);
+    assert.ok(!JSON.stringify(failures).includes('secret'));
+    await client.getQuota(); assert.equal(queries, 2);
+    client.dispose();
+});
+
+test('failed login transport has no incorrect-password cooldown; subsequent explicit command can recover', async () => {
+    let signin = 0, queries = 0;
+    const client = new AxonHubClient(credentials, { timeoutMs: 10, fetch: mock(call => {
+        if (call.path.endsWith('/signin')) {
+            signin++;
+            return signin === 1 ? new Promise((_resolve, reject) => setTimeout(() => reject(new Error('timeout secret')), 15)) : json({ token: 't' });
+        }
+        queries++; return json(page([channel()]));
+    }) });
+    await assert.rejects(client.getQuota(), (error: QuotaError) => error.code === 'timeout');
+    assert.equal((await client.getQuota()).channels.length, 1);
+    assert.equal(signin, 2); assert.equal(queries, 1);
+    client.dispose();
+});
+
+test('repeated GraphQL timeouts stop after one retry with no stale cache', async () => {
+    let queries = 0;
+    const client = new AxonHubClient(credentials, { timeoutMs: 10, fetch: mock(call => {
+        if (call.path.endsWith('/signin')) return json({ token: 't' });
+        queries++;
+        return new Promise((_resolve, reject) => setTimeout(() => reject(new Error('timeout secret')), 15));
+    }) });
+    await assert.rejects(client.getQuota(), (error: QuotaError) => error.code === 'timeout');
+    assert.equal(queries, 2);
+    client.dispose();
+});

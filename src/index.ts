@@ -30,11 +30,16 @@ class Runtime {
     constructor(context: Context) {
         this.context = context; this.file = configFile(context.configPath);
         this.config = loadConfig(this.file);
-        this.client = new AxonHubClient(this.config);
+        this.client = this.makeClient(this.config);
         this.images = new ImageRenderer();
         this.bindings = new BindingStore(join(dirname(this.file), 'bindings.json'), this.config.baseUrl);
         this.personal = new PersonalClient(this.client);
         this.handler = this.makeHandler();
+    }
+    private makeClient(config: Config) {
+        return new AxonHubClient(config, { onRequestFailure: (phase, code, elapsedMs) => {
+            this.context.logger.warn(`AxonHub ${phase} 请求失败：${code}（${elapsedMs} ms）。`);
+        } });
     }
     private makeHandler() {
         return new MessageHandler(this.context, this.config, this.client, Date.now, snapshot => this.images.render(snapshot),
@@ -50,7 +55,7 @@ class Runtime {
         saveConfig(this.file, next);
         this.handler.dispose(); this.personal.dispose(); this.client.dispose(); this.images.dispose();
         this.config = next;
-        this.client = new AxonHubClient(next);
+        this.client = this.makeClient(next);
         this.images = new ImageRenderer();
         this.personal = new PersonalClient(this.client);
         this.handler = this.makeHandler();

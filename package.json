@@ -1,7 +1,7 @@
 {
   "name": "napcat-plugin-axonhub-quota",
   "plugin": "AxonHub 订阅额度",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "按需查询 AxonHub 中 Codex 订阅窗口的轻量 NapCat 插件",
   "type": "module",
   "main": "index.mjs",
