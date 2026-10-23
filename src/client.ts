@@ -29,6 +29,8 @@ export class AxonHubClient {
     private loginPending?: Promise<string>;
     private pending?: Promise<Snapshot>;
     private cache?: Snapshot;
+    private scoped?: { key: string; snapshot: Snapshot };
+    private scopedPending?: { key: string; promise: Promise<Snapshot> };
     private loginBlockedUntil = 0;
     private closed = false;
     private controllers = new Set<AbortController>();
@@ -41,7 +43,7 @@ export class AxonHubClient {
     }
 
     dispose(): void {
-        this.closed = true; this.token = ''; this.config.password = ''; this.cache = undefined;
+        this.closed = true; this.token = ''; this.config.password = ''; this.cache = undefined; this.scoped = undefined; this.scopedPending = undefined;
         this.pending = undefined; this.loginPending = undefined;
         for (const controller of this.controllers) controller.abort();
         this.controllers.clear();
@@ -122,7 +124,7 @@ export class AxonHubClient {
     async graphql(query: string, variables: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
         let authRetries = 0, transientRetries = 0;
         // All callers use read-only GraphQL queries. Retry a failed transport once only
-        // while processing that command; never poll or refresh in the background.
+        // within that command or explicitly enabled reminder check; never start its own polling.
         for (let attempt = 0; attempt < 3; attempt++) {
             const token = await this.login();
             try {
@@ -159,12 +161,29 @@ export class AxonHubClient {
         return pending;
     }
 
-    private async readAll(): Promise<Snapshot> {
+    getQuotaForChannels(channelIds: readonly string[]): Promise<Snapshot> {
+        this.assertOpen();
+        const ids = [...new Set(channelIds)].sort();
+        if (ids.length > 5000 || ids.some(id => !/^gid:\/\/axonhub\/Channel\/\d+$/.test(id))) throw new QuotaError('config', '提醒渠道 ID 无效。');
+        if (!ids.length) return Promise.resolve({ readAt: this.now(), channels: [] });
+        const select = (snapshot: Snapshot) => ({ readAt: snapshot.readAt, channels: snapshot.channels.filter(channel => ids.includes(channel.id)) });
+        if (this.cache && this.now() - this.cache.readAt < this.ttlMs) return Promise.resolve(select(this.cache));
+        if (this.pending) return this.pending.then(select);
+        const key = ids.join(',');
+        if (this.scoped?.key === key && this.now() - this.scoped.snapshot.readAt < this.ttlMs) return Promise.resolve(this.scoped.snapshot);
+        if (this.scopedPending?.key === key) return this.scopedPending.promise;
+        const promise = this.readAll(ids).then(snapshot => { this.assertOpen(); const selected = select(snapshot); this.scoped = { key, snapshot: selected }; return selected; });
+        this.scopedPending = { key, promise };
+        void promise.finally(() => { if (this.scopedPending?.promise === promise) this.scopedPending = undefined; }).catch(() => {});
+        return promise;
+    }
+
+    private async readAll(channelIds?: string[]): Promise<Snapshot> {
         const channels: ChannelSummary[] = []; const cursors = new Set<string>(); const ids = new Set<string>();
         let after: string | undefined;
         // Stop pathological or looping pagination with an explicit error, never a partial report.
         for (let page = 0; page < 100; page++) {
-            const data = await this.graphql(QUOTA_QUERY, { input: { first: 50, ...(after ? { after } : {}), where: { statusIn: ['enabled'], typeIn: ['codex'] } } });
+            const data = await this.graphql(QUOTA_QUERY, { input: { first: 50, ...(after ? { after } : {}), where: { statusIn: ['enabled'], typeIn: ['codex'], ...(channelIds ? { idIn: channelIds } : {}) } } });
             const connection = record(data.queryChannels); const info = record(connection.pageInfo);
             if (!Array.isArray(connection.edges) || typeof info.hasNextPage !== 'boolean') throw new QuotaError('shape', 'AxonHub 渠道分页数据格式不兼容。');
             for (const edge of connection.edges) {
@@ -173,7 +192,7 @@ export class AxonHubClient {
             }
             if (!info.hasNextPage) {
                 this.assertOpen(); const snapshot = { readAt: this.now(), channels };
-                this.cache = snapshot; return snapshot;
+                if (!channelIds) this.cache = snapshot; return snapshot;
             }
             if (typeof info.endCursor !== 'string' || !info.endCursor || cursors.has(info.endCursor)) throw new QuotaError('pagination', 'AxonHub 分页异常，无法完整读取渠道。');
             after = info.endCursor; cursors.add(after);

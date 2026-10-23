@@ -10,6 +10,7 @@ coverage/
 *.key
 settings.json
 bindings.json
+reminders.json
 webui.json
 data/
 backup/

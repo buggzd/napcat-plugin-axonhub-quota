@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { record, type ChannelSummary, type Snapshot, type WindowSummary } from './types.ts';
 
 function windowLabel(seconds: unknown, fallback: string): string {
@@ -70,8 +71,15 @@ export function summarizeChannel(raw: unknown): ChannelSummary | null {
             if (resets.supported !== true) return {};
             const list = Array.isArray(resets.resets) ? resets.resets.map(record) : [];
             const expiry = list.map(item => timestamp(item.expiresAt)).filter((date): date is number => date !== null);
+            const reliable = !resets.error && Array.isArray(resets.resets) && !failed;
+            const cards = reliable ? list.flatMap(item => {
+                const expiresAt = timestamp(item.expiresAt);
+                if (item.status !== 'available' || typeof item.id !== 'string' || !item.id || item.id.length > 2048 || expiresAt === null || expiresAt <= 0) return [];
+                return [{ key: createHash('sha256').update(item.id).digest('hex'), expiresAt }];
+            }) : [];
+            const unique = new Map(cards.map(card => [card.key + ':' + card.expiresAt, card]));
             return { resets: { count: resets.error || !Array.isArray(resets.resets) ? null : list.length,
-                expiresAt: expiry.length ? Math.min(...expiry) : null } };
+                expiresAt: expiry.length ? Math.min(...expiry) : null }, ...(reliable ? { resetCards: [...unique.values()] } : {}) };
         })(),
     };
 }

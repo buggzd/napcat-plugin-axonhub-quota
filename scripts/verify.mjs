@@ -12,7 +12,7 @@ try {
     const native = await api('/Plugin/Config?id=' + id);
     assert.equal(native.config.password, '');
     const origin = process.env.NAPCAT_WEBUI_URL || 'http://127.0.0.1:6099';
-    for (const endpoint of ['/config', '/preview']) {
+    for (const endpoint of ['/config', '/preview', '/reminders']) {
         const result = await (await fetch(origin + '/api' + path + endpoint, { signal: AbortSignal.timeout(10000) })).json();
         assert.notEqual(result.code, 0, 'Unauthenticated access must be denied.');
     }

@@ -6,6 +6,8 @@ import { ImageRenderer } from './images.ts';
 import { record, type Config, type Context, type MessageEvent } from './types.ts';
 import { BindingStore } from './bindings.ts';
 import { PersonalClient } from './personal.ts';
+import { ReminderStore, ReminderService } from './reminders.ts';
+import { ReminderCommands } from './reminder-commands.ts';
 import { join, dirname } from 'node:path';
 
 export const plugin_config_ui = [
@@ -24,6 +26,9 @@ class Runtime {
     images: ImageRenderer;
     personal: PersonalClient;
     bindings: BindingStore;
+    reminderStore: ReminderStore;
+    reminders: ReminderService;
+    reminderCommands: ReminderCommands;
     file: string;
     context: Context;
     closed = false;
@@ -35,6 +40,9 @@ class Runtime {
         this.bindings = new BindingStore(join(dirname(this.file), 'bindings.json'), this.config.baseUrl);
         this.personal = new PersonalClient(this.client);
         this.handler = this.makeHandler();
+        this.reminderStore = new ReminderStore(join(dirname(this.file), 'reminders.json'), this.config.baseUrl);
+        this.reminders = new ReminderService(this.context, this.config, this.client, this.reminderStore);
+        this.reminderCommands = new ReminderCommands(this.context, this.config, this.reminders);
     }
     private makeClient(config: Config) {
         return new AxonHubClient(config, { onRequestFailure: (phase, code, elapsedMs) => {
@@ -51,17 +59,21 @@ class Runtime {
         if (next.baseUrl !== this.config.baseUrl) {
             next.channelMode = 'selected'; next.channelIds = [];
             this.bindings.clearForSite(next.baseUrl);
+            this.reminderStore.resetSite(next.baseUrl);
         }
         saveConfig(this.file, next);
+        this.reminderCommands.dispose(); this.reminders.dispose();
         this.handler.dispose(); this.personal.dispose(); this.client.dispose(); this.images.dispose();
         this.config = next;
         this.client = this.makeClient(next);
         this.images = new ImageRenderer();
         this.personal = new PersonalClient(this.client);
         this.handler = this.makeHandler();
+        this.reminders = new ReminderService(this.context, next, this.client, this.reminderStore);
+        this.reminderCommands = new ReminderCommands(this.context, next, this.reminders);
     }
     dispose(): void {
-        this.closed = true; this.handler.dispose(); this.personal.dispose(); this.client.dispose(); this.images.dispose(); this.config.password = '';
+        this.closed = true; this.reminderStore.retire(); this.reminderCommands.dispose(); this.reminders.dispose(); this.handler.dispose(); this.personal.dispose(); this.client.dispose(); this.images.dispose(); this.config.password = '';
     }
 }
 let runtime: Runtime | undefined;
@@ -109,10 +121,15 @@ export async function plugin_init(context: Context): Promise<void> {
             res.json({ code: 0, data: current.bindings.list() });
         } catch { res.status(400).json({ code: -1, message: '绑定操作失败，请检查 QQ 号与所选账号。' }); }
     });
-    context.logger.info(`${PLUGIN_ID} 已加载（按需查询，无后台轮询）。`);
+    context.router.get('/reminders', (_req, res) => res.json({ code: 0, data: { groups: current.reminderStore.groups().map(([groupId, value]) => ({ groupId, ...value })), intervalMinutes: 60, thresholdHours: 48 } }));
+    context.logger.info(`${PLUGIN_ID} 已加载（默认按需查询；已开启提醒的群每小时检查充值卡到期）。`);
 }
 
-export async function plugin_onmessage(_context: Context, event: MessageEvent): Promise<void> { await runtime?.handler.handle(event); }
+export async function plugin_onmessage(_context: Context, event: MessageEvent): Promise<void> {
+    const current = runtime;
+    if (!current || await current.reminderCommands.handle(event)) return;
+    if (runtime === current && !current.closed) await current.handler.handle(event);
+}
 export async function plugin_cleanup(): Promise<void> { runtime?.dispose(); runtime = undefined; }
 export async function plugin_get_config() { return runtime ? publicConfig(runtime.config) : {}; }
 export async function plugin_set_config(_context: Context, input: unknown): Promise<void> {

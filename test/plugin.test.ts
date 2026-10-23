@@ -89,7 +89,7 @@ test('real lifecycle routes stay protected, config changes clear auth/cache, pre
     const routes = new Map<string, RouteHandler>(); const sent: unknown[] = []; const ctx = context(sent, routes);
     try {
         await plugin.plugin_init(ctx);
-        assert.deepEqual([...routes.keys()], ['GET /config', 'POST /config', 'GET /preview', 'GET /catalog', 'POST /binding']);
+        assert.deepEqual([...routes.keys()], ['GET /config', 'POST /config', 'GET /preview', 'GET /catalog', 'POST /binding', 'GET /reminders']);
         await plugin.plugin_set_config(ctx, config);
         const sanitized = await plugin.plugin_get_config(); assert.ok(!JSON.stringify(sanitized).includes(config.password));
         const preview = routes.get('GET /preview')!;

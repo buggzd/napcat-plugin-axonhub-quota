@@ -54,6 +54,8 @@ export interface ChannelSummary {
     windows: WindowSummary[];
     quotaStatus?: string;
     resets?: { count: number | null; expiresAt: number | null };
+    // Only available card identities (hashed) and expiry times; no card content or credentials.
+    resetCards?: Array<{ key: string; expiresAt: number }>;
 }
 export interface Snapshot { readAt: number; channels: ChannelSummary[] }
 
