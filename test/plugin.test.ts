@@ -46,6 +46,10 @@ test('write-only password semantics and private atomic persistence', () => {
     assert.throws(() => updateConfig(config, { baseUrl: 'https://user:secret@example.test' }));
     assert.throws(() => updateConfig(config, { baseUrl: 'http://public.example.test' }));
     assert.throws(() => updateConfig(config, { allowedUsers: '@all' }));
+    assert.equal(updateConfig(config, { adminUsers: '345678， 234567 345678' }).adminUsers, '345678,234567');
+    assert.equal(updateConfig({ ...config, adminUsers: '345678' }, { allowedUsers: '' }).adminUsers, '345678');
+    assert.throws(() => updateConfig(config, { adminUsers: '@all' }));
+    assert.equal(updateConfig(config, { adminUsers: '' }).adminUsers, '');
     const dir = mkdtempSync(join(tmpdir(), 'axon-quota-test-')); const file = join(dir, 'settings.json');
     try {
         saveConfig(file, config); assert.equal(statSync(file).mode & 0o777, 0o600);

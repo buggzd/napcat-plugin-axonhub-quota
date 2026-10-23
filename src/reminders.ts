@@ -96,10 +96,10 @@ export function dueCards(channel: ChannelSummary, now: number): Array<{ key: str
         && card.expiresAt > now && card.expiresAt - now < EXPIRY_THRESHOLD_MS);
 }
 function noticeText(items: Notice[], now: number): string {
-    return '充值卡到期提醒\n\n' + items.map(item => {
+    return '重制卡到期提醒\n\n' + items.map(item => {
         const hours = Math.ceil((item.expiresAt - now) / 3600000);
-        return `${item.channelName.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 200)}\n一张充值卡将于 ${beijingTime(item.expiresAt)} 到期（北京时间，剩余约 ${hours} 小时）`;
-    }).join('\n\n') + '\n\n请及时在 AxonHub 查看和处理；本提醒不会使用或重置充值卡。';
+        return `${item.channelName.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 200)}\n一张重制卡将于 ${beijingTime(item.expiresAt)} 到期（北京时间，剩余约 ${hours} 小时）`;
+    }).join('\n\n') + '\n\n请及时在 AxonHub 查看和处理；本提醒不会使用或重置重制卡。';
 }
 
 export class ReminderService {
@@ -148,7 +148,7 @@ export class ReminderService {
         if (!groups.length) return Promise.resolve();
         const generation = this.generation;
         const pending = this.check(groups, generation).catch(() => {
-            if (!this.closed) this.context.logger.warn('充值卡到期检查失败，将在下个检查周期重试。');
+            if (!this.closed) this.context.logger.warn('重制卡到期检查失败，将在下个检查周期重试。');
         });
         this.running = pending;
         void pending.finally(() => {
@@ -179,7 +179,7 @@ export class ReminderService {
                     const sendAt = this.now();
                     const batch = notices.slice(start, start + 5).filter(item => item.expiresAt > sendAt && !this.store.hasDelivered(item.key) && !this.store.isSending(item.key));
                     if (!batch.length) continue;
-                    if (!this.store.hasRoom(batch.length)) { this.context.logger.warn('充值卡提醒去重记录已达上限，跳过本次新提醒。'); return; }
+                    if (!this.store.hasRoom(batch.length)) { this.context.logger.warn('重制卡提醒去重记录已达上限，跳过本次新提醒。'); return; }
                     if (!this.store.reserve(batch, this.storeEpoch)) continue;
                     try {
                         const message = [{ type: 'text', data: { text: noticeText(batch, sendAt) } }];
@@ -192,7 +192,7 @@ export class ReminderService {
                     } finally { this.store.release(batch, this.storeEpoch); }
                 }
             } catch {
-                if (!this.closed) this.context.logger.warn('一个群的充值卡提醒发送或保存失败，其余群继续检查。');
+                if (!this.closed) this.context.logger.warn('一个群的重制卡提醒发送或保存失败，其余群继续检查。');
             }
         }
     }

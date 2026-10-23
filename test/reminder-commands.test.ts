@@ -72,6 +72,48 @@ test('current owner/admin lookup is required and member, malformed or failed res
     }
 });
 
+test('configured plugin administrator can enable reminders without a group-role lookup', async () => {
+    const state = setup({ config: { adminUsers: '345678,345679' }, role: { role: 'member' } });
+    state.setRoleCall(async () => { throw new Error('group-role API unavailable'); });
+    assert.equal(await state.handler.handle(event('开启 2')), true);
+    assert.deepEqual(state.changes, [{ group: '123456', enabled: true, channelIds: [channel(2).id] }]);
+    assert.equal(state.actions.includes('get_group_member_info'), false);
+    assert.match(text(state), /已开启/); state.handler.dispose();
+});
+
+test('plugin administrator IDs match exactly and ordinary allowlisted users are not administrators', async () => {
+    for (const config of [
+        { adminUsers: '345679' },
+        { adminUsers: '1345678,3456789' },
+        { adminUsers: '', allowedUsers: '345678' },
+    ]) {
+        const state = setup({ config, role: { role: 'member' } });
+        await state.handler.handle(event('开启 2'));
+        assert.equal(state.changes.length, 0);
+        assert.equal(state.actions.filter(action => action === 'get_group_member_info').length, 1);
+        assert.match(text(state), /未能确认权限/); state.handler.dispose();
+    }
+    const unavailable = setup({ config: { adminUsers: '345679' } });
+    unavailable.setRoleCall(async () => { throw new Error('group-role API unavailable'); });
+    await unavailable.handler.handle(event('开启 2'));
+    assert.equal(unavailable.changes.length, 0); assert.match(text(unavailable), /未能确认权限/);
+    unavailable.handler.dispose();
+});
+
+test('configured plugin administrators still require an enabled, whitelisted group and self mention', async () => {
+    const state = setup({ config: { adminUsers: '345678', allowedUsers: '345678' } });
+    for (const invalid of [
+        { ...event('开启 2'), group_id: '999999' },
+        { ...event('开启 2'), message_type: 'private' },
+        { ...event('开启 2'), message: '/到期提醒 开启 2' },
+        { ...event('开启 2'), message: '[CQ:at,qq=999999] /到期提醒 开启 2' },
+    ]) assert.equal(await state.handler.handle(invalid), false);
+    assert.equal(state.actions.length, 0); assert.equal(state.changes.length, 0); state.handler.dispose();
+    const disabled = setup({ config: { enabled: false, adminUsers: '345678' } });
+    assert.equal(await disabled.handler.handle(event('开启 2')), false);
+    assert.equal(disabled.actions.length, 0); assert.equal(disabled.changes.length, 0); disabled.handler.dispose();
+});
+
 test('selected channels accept short/full IDs and exact names; every selection must resolve uniquely', async () => {
     const valid = setup();
     await valid.handler.handle(event('开启 2，gid://axonhub/Channel/15,Channel 2'));

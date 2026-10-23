@@ -35,6 +35,7 @@ export interface Config {
     password: string;
     allowedGroups: string;
     allowedUsers: string;
+    adminUsers: string;
 }
 export interface WindowSummary {
     label: string;

@@ -7,15 +7,15 @@ export interface ReminderCommandService {
 }
 
 const HELP = [
-    '充值卡到期提醒（默认关闭）',
+    '重制卡到期提醒（默认关闭）',
     '@机器人 /到期提醒 渠道 — 列出可选渠道及编号',
     '@机器人 /到期提醒 开启 2,15 — 为本群选择渠道并开启',
     '也可填写完整渠道 ID 或准确名称，多个渠道用逗号分隔。',
     '@机器人 /到期提醒 开启 — 沿用本群已保存的渠道',
     '@机器人 /到期提醒 状态 — 查看本群设置',
     '@机器人 /到期提醒 关闭 — 关闭本群提醒，保留渠道选择',
-    '仅群主和管理员可配置；仅在开启后每小时轻量检查。',
-    '充值卡剩余不足 48 小时且尚未到期时提醒，同一张卡的同一次到期仅提醒一次。',
+    '插件管理员、群主和群管理员可配置；仅在开启后每小时轻量检查。',
+    '重制卡剩余不足 48 小时且尚未到期时提醒，同一张卡的同一次到期仅提醒一次。',
 ].join('\n');
 const CHANNEL_ID = /^gid:\/\/axonhub\/Channel\/([1-9]\d*)$/;
 const shortId = (id: string) => CHANNEL_ID.exec(id)?.[1] ?? id;
@@ -90,7 +90,7 @@ export class ReminderCommands {
         if (!this.active) return;
         try {
             if (!await this.isAdmin(event)) {
-                if (this.active) await this.reply(event, '到期提醒仅允许本群群主或管理员配置；未能确认权限时不会修改设置。');
+                if (this.active) await this.reply(event, '到期提醒仅允许插件配置的管理员 QQ、本群群主或群管理员配置；未能确认权限时不会修改设置。');
                 return;
             }
             if (!this.active) return;
@@ -133,7 +133,7 @@ export class ReminderCommands {
             if (!this.active) return;
             this.service.setGroup(group, { enabled: true, channelIds: selected.map(channel => channel.id) });
             await this.reply(event, '本群到期提醒已开启。\n渠道：' + selected.map(channel => `${shortId(channel.id)} ${safeName(channel.name)}`).join('、')
-                + '\n每小时轻量检查；充值卡剩余不足 48 小时且尚未到期时提醒，同一张卡的同一次到期仅提醒一次。');
+                + '\n每小时轻量检查；重制卡剩余不足 48 小时且尚未到期时提醒，同一张卡的同一次到期仅提醒一次。');
         } catch {
             if (this.active) {
                 try { await this.reply(event, '到期提醒操作失败，请检查 AxonHub 和机器人权限后重试。'); }
@@ -143,6 +143,7 @@ export class ReminderCommands {
     }
 
     private async isAdmin(event: MessageEvent): Promise<boolean> {
+        if (this.config.adminUsers.split(',').includes(String(event.user_id))) return true;
         try {
             const result = record(await this.context.actions.call('get_group_member_info', {
                 group_id: String(event.group_id), user_id: String(event.user_id), no_cache: true,

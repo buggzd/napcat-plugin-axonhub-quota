@@ -6,7 +6,7 @@ import { record } from './types.ts';
 export const PLUGIN_ID = 'napcat-plugin-axonhub-quota';
 export const DEFAULT_CONFIG: Config = {
     enabled: true, baseUrl: 'https://axonhub.example.com', email: '', password: '',
-    allowedGroups: '', allowedUsers: '', channelMode: 'all', channelIds: [], privateBinding: true,
+    allowedGroups: '', allowedUsers: '', adminUsers: '', channelMode: 'all', channelIds: [], privateBinding: true,
 };
 
 export function normalizeIds(value: unknown): string {
@@ -32,7 +32,7 @@ export function updateConfig(previous: Config, input: unknown): Config {
         else next[key] = raw[key].trim();
     }
     if (raw.clearPassword === true) next.password = '';
-    for (const key of ['allowedGroups', 'allowedUsers'] as const) {
+    for (const key of ['allowedGroups', 'allowedUsers', 'adminUsers'] as const) {
         if (key in raw) next[key] = normalizeIds(raw[key]);
     }
     if ('privateBinding' in raw) {

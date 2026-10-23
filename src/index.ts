@@ -14,9 +14,10 @@ export const plugin_config_ui = [
     { key: '_guide', type: 'text', label: '', default: '账号和密码请在插件扩展页「AxonHub 额度设置」配置；密码保存后不回传。' },
     { key: 'enabled', type: 'boolean', label: '启用插件', default: true },
     { key: 'baseUrl', type: 'string', label: 'AxonHub 地址', default: 'https://axonhub.example.com' },
-    { key: 'email', type: 'string', label: '管理员邮箱', default: '' },
+    { key: 'email', type: 'string', label: 'AxonHub 管理员邮箱', default: '' },
     { key: 'allowedGroups', type: 'string', label: '允许查询的群号', default: '', description: '逗号或空格分隔；群内必须 @机器人 /额度；空名单关闭群查询。' },
     { key: 'allowedUsers', type: 'string', label: '允许私聊的 QQ 号', default: '', description: '逗号或空格分隔；私聊发送 /额度；空名单关闭私聊查询。' },
+    { key: 'adminUsers', type: 'string', label: '插件管理员 QQ 号', default: '', description: '逗号或空格分隔；可在白名单群内 @机器人管理到期提醒，无需群管理员身份。群主及群管理员也可操作。' },
 ];
 
 class Runtime {
@@ -122,7 +123,7 @@ export async function plugin_init(context: Context): Promise<void> {
         } catch { res.status(400).json({ code: -1, message: '绑定操作失败，请检查 QQ 号与所选账号。' }); }
     });
     context.router.get('/reminders', (_req, res) => res.json({ code: 0, data: { groups: current.reminderStore.groups().map(([groupId, value]) => ({ groupId, ...value })), intervalMinutes: 60, thresholdHours: 48 } }));
-    context.logger.info(`${PLUGIN_ID} 已加载（默认按需查询；已开启提醒的群每小时检查充值卡到期）。`);
+    context.logger.info(`${PLUGIN_ID} 已加载（默认按需查询；已开启提醒的群每小时检查重制卡到期）。`);
 }
 
 export async function plugin_onmessage(_context: Context, event: MessageEvent): Promise<void> {
